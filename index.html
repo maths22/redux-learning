@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Calendar</title>
+    <script src="https://unpkg.com/react@latest/dist/react.js"></script>
+    <script src="https://unpkg.com/react-dom@latest/dist/react-dom.js"></script>
+    <script src="https://unpkg.com/immutable/dist/immutable.js"></script>
+    <script src="https://unpkg.com/redux/dist/redux.min.js"></script>
+    <script src="https://unpkg.com/react-redux/dist/react-redux.min.js"></script>
+    <script src="https://unpkg.com/babel-standalone@6.15.0/babel.min.js"></script>
+
+    <style>
+        .comments {
+            margin-left: 1em;
+        }
+        .subcomments {
+            margin-left: 0.75em;
+        }
+        .collapser {
+            float: left;
+            padding-right: 2px;
+            font-family: monospace;
+        }
+        .commentRegion {
+            display: inline-block;
+        }
+        .comment {
+            margin-top: 0;
+        }
+        .commentParent {
+            margin-top: 1em;
+        }
+        .action {
+            margin-left: 0.5em;
+            margin-right: 0.5em;
+        }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="text/babel">
+        const { createStore } = Redux;
+        /*
+        Data structure:
+        {
+            post: "text of post",
+            comments: [
+                {text: "text of comment", collapsed: t/f, comments: []}
+            ]
+        }
+        */
+        const uiState = (state = Immutable.fromJS({currentNode: undefined, currentAction: 'view'}), action) => {
+            switch(action.type){ 
+                case 'OPEN_REPLY':
+                    state = state.set('currentNode', action.target);
+                    return  state.set('currentAction', 'reply');
+                case 'OPEN_EDIT':
+                    state = state.set('currentNode', action.target);
+                    return state.set('currentAction', 'edit');
+                case 'CLOSE_INPUT':
+                    state = state.set('currentNode', undefined);
+                    return state.set('currentAction', 'view');
+                default:
+                    return state;
+            }
+        }
+        const comments = (comments = Immutable.fromJS([{text: 'This is a wonderful post', collapsed: false, comments: []}]), action) => {
+            function generateNestedPath(arr) {
+                var res = [], i=0;
+                if (i < arr.length)
+                    res.push(arr[i++]);
+                while (i < arr.length)
+                    res.push('comments', arr[i++]);
+                return res;
+            }
+            
+            switch(action.type) { 
+                case 'DELETE_COMMENT':
+                    var target = action.target.split('-');
+                    target = generateNestedPath(target);
+                    return comments.deleteIn(target);
+                case 'SAVE_EDIT':
+                    var target = action.target.split('-');
+                    target = generateNestedPath(target);
+                    target.push('text')
+                    return comments.setIn(target, action.text);
+                case 'SAVE_REPLY':
+                    var target = action.target.split('-');
+                    target = generateNestedPath(target);
+                    target.push('comments')
+                    return comments.updateIn(target, (l) => l.push(Immutable.fromJS({text: action.text, collapsed: false, comments: []})));
+                case 'TOGGLE_COLLAPSE':
+                    var target = action.target.split('-');
+                    target = generateNestedPath(target);
+                    target.push('collapsed');
+                    return comments.setIn(target, !comments.getIn(target));
+                default:
+                    return comments;
+            }
+        }
+
+        const commentBoard = (state = new Immutable.Map(), action) => {
+            state = state.set('comments', comments(state.get('comments'), action));
+            state = state.set('uiState', uiState(state.get('uiState'), action));
+            return state;
+        }
+
+        class CommentThread extends React.Component {
+            constructor(props) {
+                super(props);
+
+                this.toggleCollapse = this.toggleCollapse.bind(this);
+                this.deleteComment = this.deleteComment.bind(this);
+                this.openEdit = this.openEdit.bind(this);
+                this.openReply = this.openReply.bind(this);
+                this.closeInput = this.closeInput.bind(this);
+                this.saveEdit = this.saveEdit.bind(this);
+                this.saveReply = this.saveReply.bind(this);
+            }
+
+            toggleCollapse(e) {
+                e.preventDefault();
+                store.dispatch({'type': 'TOGGLE_COLLAPSE', 'target': e.target.dataset['id']});
+            }
+
+            deleteComment(e) {
+                e.preventDefault();
+                store.dispatch({'type': 'DELETE_COMMENT', 'target': e.target.dataset['id']});
+            }
+
+            openEdit(e) {
+                e.preventDefault();
+                store.dispatch({'type': 'OPEN_EDIT', 'target': e.target.dataset['id']});
+            }
+
+            openReply(e) {
+                e.preventDefault();
+                store.dispatch({'type': 'OPEN_REPLY', 'target': e.target.dataset['id']});
+            }
+
+            closeInput(e) {
+                e.preventDefault();
+                store.dispatch({'type': 'CLOSE_INPUT'});
+            }
+
+            saveEdit(e) {
+                e.preventDefault();
+                store.dispatch({'type': 'SAVE_EDIT', 'target': e.target.dataset['id'], 'text': this.input.value});
+                store.dispatch({'type': 'CLOSE_INPUT'});
+            };
+
+            saveReply(e) {
+                e.preventDefault();
+                store.dispatch({'type': 'SAVE_REPLY', 'target': e.target.dataset['id'], 'text': this.input.value});
+                store.dispatch({'type': 'CLOSE_INPUT'});
+            }
+
+            render() {
+                var subCommentThreads = this.props.comment.get('comments').map((c, idx) => (<CommentThread uiState={this.props.uiState} comment={c} key={idx} nodeid={this.props.nodeid + '-' + idx}/>));
+
+                var expanderSymbol = this.props.comment.get('collapsed') ? '[+]' : '[-]';
+                var divClassName = 'commentRegion ' + this.props.comment.get('collapsed') ? 'collapsed' : 'expanded';
+                var childrenComments = this.props.comment.get('collapsed') ? null :
+                    (<div className="subcomments">{subCommentThreads}</div>);
+                var actions = this.props.uiState.get('currentNode') == this.props.nodeid ? null :
+                    [<a key="edit" className="action" href="" onClick={this.openEdit} data-id={this.props.nodeid}>Edit</a>,
+                    <a key="reply" className="action" href="" onClick={this.openReply} data-id={this.props.nodeid}>Reply</a>,
+                    this.props.nodeid != '0' ? <a key="delete" className="action" href="" onClick={this.deleteComment} data-id={this.props.nodeid}>Delete</a> : null];
+                var textField = null;
+                if(this.props.uiState.get('currentAction') == 'edit' && this.props.uiState.get('currentNode') == this.props.nodeid) {
+                    textField = (<div>
+                        <textarea defaultValue={this.props.comment.get('text')} ref={(input) => this.input = input}></textarea>
+                        <a className="action" href="" onClick={this.saveEdit} data-id={this.props.nodeid}>Save</a>
+                        <a className="action" href="" onClick={this.closeInput} data-id={this.props.nodeid}>Cancel</a>
+                    </div>);
+                } else if(this.props.uiState.get('currentAction') == 'reply' && this.props.uiState.get('currentNode') == this.props.nodeid) {
+                    textField = (<div>
+                        <textarea ref={(input) => this.input = input}></textarea>
+                        <a className="action" href="" onClick={this.saveReply} data-id={this.props.nodeid}>Save</a>
+                        <a className="action" href="" onClick={this.closeInput} data-id={this.props.nodeid}>Cancel</a>
+                    </div>);
+                }
+                
+                return (<div className="commentParent">
+                            <a href="" className="collapser" onClick={this.toggleCollapse} data-id={this.props.nodeid}>{expanderSymbol}</a>
+                            <div className={divClassName}>
+                                <p className="comment">{this.props.comment.get('text')}</p>
+                                {actions}
+                                {textField}
+                            </div>
+                            {childrenComments}
+                        </div>);
+            }
+        }
+
+        function CommentBoard(props) {
+            //TODO: using index is bad form
+            var commentNodes = props.state.get('comments').map((c, idx) => (<CommentThread uiState={props.state.get('uiState')} comment={c} key={idx} nodeid={idx}/>));
+            return (<div className="comments">
+                    {commentNodes}
+                </div>);
+        }
+
+        
+        const store = createStore(commentBoard);
+
+        const render = () => {
+            ReactDOM.render(<CommentBoard 
+                state={store.getState()}
+            />, document.getElementById("root"));
+            };
+
+            store.subscribe(render);
+            render();
+
+    </script>
+  </body>
+</html>
